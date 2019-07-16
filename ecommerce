@@ -1,0 +1,235 @@
+//Define your thresholds, for example [100,200,300] is equal to 100%, 200% and 300%
+var THRESHOLDS = [100,200,300,400,500,600,700,800,900,1000,1100,1200,1300]
+                  
+
+//Specify the sheet URL
+var SHEET = 'INSERT GOOGLE SHEETS URL HERE'
+
+//Specify how many weeks of data (counting from today) you want to include
+var LOOKBACK = 5
+
+function getReport()
+{
+  var now = new Date()
+  var oneDay = 1000*60*60*24
+  var yesterday = new Date(now - oneDay)
+  var sevenDays = oneDay * 7
+  var startDate = new Date(now - LOOKBACK * sevenDays)
+  
+  var yesterday = Utilities.formatDate(yesterday, 'gmt', 'yyyyMMdd')
+  var startDate = Utilities.formatDate(startDate, 'gmt', 'yyyyMMdd')
+  var combinedDate = startDate + ',' + yesterday
+  
+  var query = "SELECT Week, Criteria, Cost, ConversionValue FROM KEYWORDS_PERFORMANCE_REPORT WHERE Cost > 0 DURING " + combinedDate
+  Logger.log('Getting data for ' + combinedDate)
+
+
+  
+  var report = AdWordsApp.report(query)
+  var rows = report.rows()
+  var parsedWeek = {}
+  var parsedAll = {'spend':{},'number':{}}
+  var thresholds = {}
+  
+  for(var t in THRESHOLDS)
+  {
+    parsedAll['spend'][THRESHOLDS[t]] = 0
+    parsedAll['number'][THRESHOLDS[t]] = 0
+  }
+  parsedAll['spend']['total'] = 0
+  parsedAll['number']['total'] = 0
+
+
+  while (rows.hasNext())
+  {
+    var row = rows.next()
+	var week = row['Week']
+    var revenue = parseFloat(row['ConversionValue'].replace(',','').replace(',',''))
+    var cost = parseFloat(row['Cost'].replace(',',''))
+    var keyword = row['Criteria']
+    if (revenue > 0)
+    {var roas = parseFloat((revenue/cost) * 100)}
+    else
+    {var roas = 0}
+    var keys = Object.keys(parsedWeek)
+    if (keys.indexOf(week) == -1)
+    {
+      parsedWeek[week] = {'spend':{},'number':{}}
+        for(var t in THRESHOLDS)
+  	{
+
+      parsedWeek[week]['spend'][THRESHOLDS[t]] = 0
+      parsedWeek[week]['number'][THRESHOLDS[t]] = 0
+    }
+      parsedWeek[week]['spend']['total'] = 0
+      parsedWeek[week]['number']['total'] = 0
+    }
+    for(var t in THRESHOLDS)
+    {
+
+      if(roas < THRESHOLDS[t])
+      {
+        parsedWeek[week]['spend'][THRESHOLDS[t]] = parsedWeek[week]['spend'][THRESHOLDS[t]] + cost
+        parsedAll['spend'][THRESHOLDS[t]] = parsedAll['spend'][THRESHOLDS[t]] + cost
+        
+        parsedWeek[week]['number'][THRESHOLDS[t]] = parsedWeek[week]['number'][THRESHOLDS[t]] + 1
+        parsedAll['number'][THRESHOLDS[t]] = parsedAll['number'][THRESHOLDS[t]] + 1
+        break
+      }
+      else if(t == THRESHOLDS.length - 1)
+      {
+        parsedWeek[week]['spend'][THRESHOLDS[t]] = parsedWeek[week]['spend'][THRESHOLDS[t]] + cost
+        parsedAll['spend'][THRESHOLDS[t]] = parsedAll['spend'][THRESHOLDS[t]] + cost
+       
+        parsedWeek[week]['number'][THRESHOLDS[t]] = parsedWeek[week]['number'][THRESHOLDS[t]] + 1
+        parsedAll['number'][THRESHOLDS[t]] = parsedAll['number'][THRESHOLDS[t]] + 1
+      }
+    }
+    
+    parsedWeek[week]['spend']['total'] = parsedWeek[week]['spend']['total'] + cost
+    parsedAll['spend']['total'] = parsedAll['spend']['total'] + cost
+    
+    parsedWeek[week]['number']['total'] = parsedWeek[week]['number']['total'] + 1
+    parsedAll['number']['total'] = parsedAll['number']['total'] + 1
+    
+    
+  }
+
+  return [parsedWeek,parsedAll]
+  
+}
+
+function parseTotal(total)
+{
+  var tiers = {}
+      var names = ['SPEND'] 
+    var values = ['Value']
+    var ofTotal = ['% of total']
+  for(var t in THRESHOLDS)
+  {
+
+    names.push(THRESHOLDS[t] + '%')
+    values.push(total['spend'][THRESHOLDS[t]])
+    ofTotal.push(((total['spend'][THRESHOLDS[t]]/total['spend']['total']) * 100).toFixed(2) + '%')
+  }
+  var parsed = [names,values, ofTotal]
+  return parsed
+}
+
+function parseWeek(week, metric)
+{
+
+  var weeks = Object.keys(week)
+  var rows = []
+  for(var i in weeks)
+  {
+    var temp = []
+    
+    var single = weeks[i]
+    temp.push(single)
+    
+    for(var t in THRESHOLDS)
+    {
+      temp.push( (week[single][metric][THRESHOLDS[t]]/week[single][metric]['total']).toFixed(2))
+    }
+    
+    rows.push(temp)
+  }
+  return rows
+}
+
+function prepareDataSheet(sheet)
+{
+ var header = []
+ for(var t in THRESHOLDS)
+ {
+   header.push(THRESHOLDS[t] + '%')
+ }
+  sheet.clear()
+  sheet.getRange(1,2,1,THRESHOLDS.length).setValues([header])
+}
+
+function createChart(sheet,col,dataSheet,title)
+{
+  
+    if(sheet.getCharts().length < 2)
+    {
+      
+        var chart = sheet.newChart().asColumnChart()
+  .setMergeStrategy(Charts.ChartMergeStrategy.MERGE_COLUMNS)
+  .addRange(sheet.getRange(dataSheet+'!A:A'))
+  .addRange(sheet.getRange(dataSheet+'!B:AX'))
+  .setPosition(10,col,10,10)
+  .setNumHeaders(1)
+  .setOption('title', title)
+  .setOption('legend', {'position':'right'})
+   .setOption('isStacked', 'percent')
+   .setOption('treatLabelsAsText', true)
+  .build()
+    sheet.insertChart(chart)
+    }
+  else
+  {return}
+
+  
+}
+
+function insertSheets(ss)
+{
+  try{ss.insertSheet('data-spend')}
+  catch(e){}
+  
+  try{ss.insertSheet('data-number')}
+  catch(e){}
+}
+
+function insertData(dataSheet, weekParsed)
+{
+  var dataRange = dataSheet.getRange(2,1,weekParsed.length,weekParsed[0].length)
+  dataRange.clear()
+  dataRange.setValues(weekParsed)
+  dataRange.sort(1)
+  var colA = dataSheet.getRange(2,1,weekParsed.length,1)
+  colA.setNumberFormat('mmmm/d/yyyy')
+}
+
+function main()
+{
+  var ss = SpreadsheetApp.openByUrl(SHEET)
+  var sheet = ss.getActiveSheet()
+	
+  
+  insertSheets(ss)
+
+
+  var dataSheetSpend = ss.getSheetByName('data-spend')
+  prepareDataSheet(dataSheetSpend)
+  var dataSheetNumber = ss.getSheetByName('data-number')
+  prepareDataSheet(dataSheetNumber)
+  
+  var data = getReport()
+  var week = data[0]
+  var total = data[1]
+  
+  Logger.log('Parsing data')
+  
+  var totalParsed = parseTotal(total)
+  var weekParsedSpend = parseWeek(week,'spend')
+  var weekParsedNumber = parseWeek(week,'number')
+  
+  Logger.log('Preparing the sheet')
+  
+  insertData(dataSheetSpend, weekParsedSpend)
+  insertData(dataSheetNumber, weekParsedNumber)
+  createChart(sheet, 2, 'data-spend','% Spend by Target ROAS')
+  createChart(sheet, 9, 'data-number','% Keywords by Target ROAS')
+
+  
+  sheet.clear()
+  sheet.getRange(1,1,3,totalParsed[0].length).setValues(totalParsed)
+  sheet.getRange(1,1,1,totalParsed[0].length).setFontWeight('bold')
+  
+  Logger.log('Done')
+  
+  
+}
